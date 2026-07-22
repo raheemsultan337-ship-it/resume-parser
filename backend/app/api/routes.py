@@ -12,6 +12,8 @@ Endpoint:
 import logging
 import os
 
+from pydantic import BaseModel
+from app.llm.validate import analyze_resume
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
@@ -116,3 +118,40 @@ async def upload_resume(file: UploadFile = File(...)):
             "extracted_text": extracted_text,
         }
     )
+# =============================================================================
+# POST /analyze
+# =============================================================================
+
+class AnalyzeRequest(BaseModel):
+    """Request body for resume-vs-job-description analysis."""
+    extracted_text: str
+    job_description: str
+
+
+@router.post("/analyze", summary="Compare resume text against a job description")
+async def analyze(req: AnalyzeRequest):
+    """Compare extracted resume text against a job description using an LLM.
+
+    Args:
+        req: JSON body containing `extracted_text` (from /upload) and
+             `job_description` (pasted or uploaded by the user).
+
+    Returns:
+        JSON object with:
+          - match_score (int): 0-100 score of resume-to-JD fit.
+          - missing_keywords (list[str]): Important JD terms absent from resume.
+          - suggestions (list[str]): Actionable rewrite suggestions.
+
+    Raises:
+        502 Bad Gateway: If the LLM fails to return valid JSON after retries.
+    """
+    try:
+        result = analyze_resume(req.extracted_text, req.job_description)
+    except RuntimeError as exc:
+        logger.error("LLM analysis failed: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to analyze resume: {exc}",
+        ) from exc
+
+    return JSONResponse(content=result.model_dump())
